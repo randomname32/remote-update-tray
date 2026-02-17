@@ -190,17 +190,22 @@ class SettingsDialog(Gtk.Dialog):
         name_entry = Gtk.Entry()
         host_entry = Gtk.Entry()
         root_check = Gtk.CheckButton(label="Connect as root (no sudo)")
+        auto_yes_check = Gtk.CheckButton(label="Auto-confirm upgrade (no prompt)")
 
         if machine:
             name_entry.set_text(machine["name"])
             host_entry.set_text(machine["host"])
             root_check.set_active(machine.get("root", False))
+            auto_yes_check.set_active(machine.get("auto_yes", True))
+        else:
+            auto_yes_check.set_active(True)
 
         box.add(Gtk.Label(label="Name"))
         box.add(name_entry)
         box.add(Gtk.Label(label="Host"))
         box.add(host_entry)
         box.add(root_check)
+        box.add(auto_yes_check)
 
         dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
         dialog.add_button("Save", Gtk.ResponseType.OK)
@@ -212,13 +217,15 @@ class SettingsDialog(Gtk.Dialog):
             name = name_entry.get_text()
             host = host_entry.get_text()
             root = root_check.get_active()
+            auto_yes = auto_yes_check.get_active()
 
             if machine:
                 machine["name"] = name
                 machine["host"] = host
                 machine["root"] = root
+                machine["auto_yes"] = auto_yes
             else:
-                self.config["machines"].append({"name": name, "host": host, "root": root})
+                self.config["machines"].append({"name": name, "host": host, "root": root, "auto_yes": auto_yes})
 
             save_config(self.config)
             self.refresh_list()
@@ -263,7 +270,7 @@ class UpdateTray:
             submenu = Gtk.Menu()
 
             install_item = Gtk.MenuItem(label="Install updates")
-            install_item.connect("activate", self.install_updates, machine["host"], machine.get("root", False))
+            install_item.connect("activate", self.install_updates, machine["host"], machine.get("root", False), machine.get("auto_yes", True))
             submenu.append(install_item)
 
             terminal_item = Gtk.MenuItem(label="Open terminal")
@@ -387,9 +394,10 @@ class UpdateTray:
         else:
             self.indicator.set_icon_full("software-update-available", "Updates available")
 
-    def install_updates(self, widget, host, root):
+    def install_updates(self, widget, host, root, auto_yes=True):
         prefix = "" if root else "sudo "
-        upgrade_cmd = f"{prefix}apt update && {prefix}apt upgrade -y; echo ''; echo 'Done. Press Enter to close.'; read"
+        yes_flag = "-y " if auto_yes else ""
+        upgrade_cmd = f"{prefix}apt update && {prefix}apt upgrade {yes_flag}; echo ''; echo 'Done. Press Enter to close.'; read"
         if host in ("localhost", "127.0.0.1"):
             cmd = ["gnome-terminal", "--", "bash", "-c", upgrade_cmd]
         else:

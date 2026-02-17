@@ -1,7 +1,16 @@
+remote-update-tray (1.2.0-1) unstable; urgency=low
+
+  * Add configurable check interval in Settings dialog.
+  * Add About dialog showing version number and usage info.
+  * Add auto-confirm upgrade option per machine (controls -y flag).
+  * Auto-restart on check interval change.
+  * Fix set_icon deprecation warning.
+
+ -- Johannes Martini <j.martini@web.de>  Mon, 17 Feb 2026 13:00:00 +0100
+
 remote-update-tray (1.1.0-1) unstable; urgency=low
 
   * Add autostart enable/disable checkbox to Settings dialog.
-  * Add About dialog showing version number and usage info.
 
  -- Johannes Martini <j.martini@web.de>  Mon, 17 Feb 2026 12:00:00 +0100
 
