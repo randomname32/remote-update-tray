@@ -15,6 +15,8 @@ import threading
 APP_NAME = "remote-update-tray"
 CONFIG_DIR = os.path.expanduser("~/.config/remote-update-tray")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+AUTOSTART_DIR = os.path.expanduser("~/.config/autostart")
+AUTOSTART_FILE = os.path.join(AUTOSTART_DIR, "remote-update-tray.desktop")
 CHECK_INTERVAL_SECONDS = 600
 
 
@@ -41,6 +43,31 @@ def load_config():
 def save_config(config):
     with open(CONFIG_FILE, "w") as f:
         json.dump(config, f, indent=4)
+
+
+# =========================
+# AUTOSTART MANAGEMENT
+# =========================
+
+def get_autostart_enabled():
+    if not os.path.exists(AUTOSTART_FILE):
+        return True
+    with open(AUTOSTART_FILE) as f:
+        return "X-GNOME-Autostart-enabled=false" not in f.read()
+
+
+def set_autostart_enabled(enabled):
+    if enabled:
+        if os.path.exists(AUTOSTART_FILE):
+            os.remove(AUTOSTART_FILE)
+    else:
+        os.makedirs(AUTOSTART_DIR, exist_ok=True)
+        with open(AUTOSTART_FILE, "w") as f:
+            f.write("[Desktop Entry]\n")
+            f.write("Type=Application\n")
+            f.write("Name=Remote Update Tray\n")
+            f.write("Exec=remote-update-tray\n")
+            f.write("X-GNOME-Autostart-enabled=false\n")
 
 
 # =========================
@@ -99,6 +126,11 @@ class SettingsDialog(Gtk.Dialog):
         add_button.connect("clicked", self.add_machine)
         button_box.pack_start(add_button, True, True, 0)
 
+        self.autostart_check = Gtk.CheckButton(label="Autostart on login")
+        self.autostart_check.set_active(get_autostart_enabled())
+        self.autostart_check.connect("toggled", self.on_autostart_toggled)
+        box.add(self.autostart_check)
+
         self.show_all()
 
     def refresh_list(self):
@@ -124,6 +156,9 @@ class SettingsDialog(Gtk.Dialog):
             self.listbox.add(row)
 
         self.show_all()
+
+    def on_autostart_toggled(self, widget):
+        set_autostart_enabled(widget.get_active())
 
     def add_machine(self, widget):
         self.machine_editor()
