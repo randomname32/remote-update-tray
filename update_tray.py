@@ -8,6 +8,7 @@ from gi.repository import Gtk, GLib
 from gi.repository import AyatanaAppIndicator3 as AppIndicator3
 
 import os
+import sys
 import json
 import subprocess
 import threading
@@ -17,7 +18,6 @@ CONFIG_DIR = os.path.expanduser("~/.config/remote-update-tray")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 AUTOSTART_DIR = os.path.expanduser("~/.config/autostart")
 AUTOSTART_FILE = os.path.join(AUTOSTART_DIR, "remote-update-tray.desktop")
-CHECK_INTERVAL_SECONDS = 600
 
 
 # =========================
@@ -29,7 +29,7 @@ def ensure_config():
         os.makedirs(CONFIG_DIR)
 
     if not os.path.exists(CONFIG_FILE):
-        default = {"machines": [{"name": "localhost", "host": "localhost", "root": False}]}
+        default = {"check_interval_minutes": 10, "machines": [{"name": "localhost", "host": "localhost", "root": False}]}
         with open(CONFIG_FILE, "w") as f:
             json.dump(default, f, indent=4)
 
@@ -126,6 +126,14 @@ class SettingsDialog(Gtk.Dialog):
         add_button.connect("clicked", self.add_machine)
         button_box.pack_start(add_button, True, True, 0)
 
+        interval_box = Gtk.Box(spacing=6)
+        interval_box.add(Gtk.Label(label="Check interval (minutes):"))
+        self.interval_spin = Gtk.SpinButton.new_with_range(1, 1440, 1)
+        self.interval_spin.set_value(self.config.get("check_interval_minutes", 10))
+        self.interval_spin.connect("value-changed", self.on_interval_changed)
+        interval_box.add(self.interval_spin)
+        box.add(interval_box)
+
         self.autostart_check = Gtk.CheckButton(label="Autostart on login")
         self.autostart_check.set_active(get_autostart_enabled())
         self.autostart_check.connect("toggled", self.on_autostart_toggled)
@@ -156,6 +164,10 @@ class SettingsDialog(Gtk.Dialog):
             self.listbox.add(row)
 
         self.show_all()
+
+    def on_interval_changed(self, widget):
+        self.config["check_interval_minutes"] = widget.get_value_as_int()
+        save_config(self.config)
 
     def on_autostart_toggled(self, widget):
         set_autostart_enabled(widget.get_active())
@@ -237,7 +249,8 @@ class UpdateTray:
         self.build_menu()
         self.refresh()
 
-        GLib.timeout_add_seconds(CHECK_INTERVAL_SECONDS, self.refresh)
+        interval = self.config.get("check_interval_minutes", 10) * 60
+        GLib.timeout_add_seconds(interval, self.refresh)
 
     def build_menu(self):
         for item in self.menu.get_children():
@@ -269,6 +282,11 @@ class UpdateTray:
         settings_item.show()
         self.menu.append(settings_item)
 
+        about_item = Gtk.MenuItem(label="About")
+        about_item.connect("activate", self.open_about)
+        about_item.show()
+        self.menu.append(about_item)
+
         refresh_item = Gtk.MenuItem(label="Refresh now")
         refresh_item.connect("activate", self.refresh)
         refresh_item.show()
@@ -279,12 +297,46 @@ class UpdateTray:
         quit_item.show()
         self.menu.append(quit_item)
 
+    def open_about(self, *_):
+        try:
+            version = subprocess.check_output(
+                ["dpkg-query", "-W", "-f=${Version}", APP_NAME],
+                stderr=subprocess.DEVNULL,
+                text=True,
+            ).strip()
+        except Exception:
+            version = "dev"
+
+        dialog = Gtk.MessageDialog(
+            transient_for=None,
+            flags=0,
+            message_type=Gtk.MessageType.INFO,
+            buttons=Gtk.ButtonsType.OK,
+            text=f"Remote Update Tray  v{version}",
+        )
+        dialog.format_secondary_text(
+            "Monitors remote machines for available APT updates over SSH.\n\n"
+            "Checks at regular intervals. Tray icon reflects overall status:\n"
+            "  • Green check — all machines up to date\n"
+            "  • Package icon — updates available\n"
+            "  • Warning — one or more machines unreachable\n\n"
+            "Manage machines and autostart via the Settings menu."
+        )
+        dialog.run()
+        dialog.destroy()
+
     def open_settings(self, *_):
+        old_interval = self.config.get("check_interval_minutes", 10)
+
         dialog = SettingsDialog(None, self.config)
         dialog.run()
         dialog.destroy()
 
         self.config = load_config()
+
+        if self.config.get("check_interval_minutes", 10) != old_interval:
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+
         self.build_menu()
         self.refresh()
 
@@ -329,11 +381,11 @@ class UpdateTray:
 
     def update_icon(self, total, error):
         if error:
-            self.indicator.set_icon("dialog-warning")
+            self.indicator.set_icon_full("dialog-warning", "Connection error")
         elif total == 0:
-            self.indicator.set_icon("emblem-default")
+            self.indicator.set_icon_full("emblem-default", "Up to date")
         else:
-            self.indicator.set_icon("software-update-available")
+            self.indicator.set_icon_full("software-update-available", "Updates available")
 
     def install_updates(self, widget, host, root):
         prefix = "" if root else "sudo "

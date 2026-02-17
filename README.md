@@ -16,7 +16,7 @@ A lightweight system tray applet for Ubuntu/GNOME that monitors remote (and loca
 
 Machine definitions are stored in `~/.config/remote-update-tray/config.json` (created automatically on first run). You can manage machines through the Settings dialog in the tray menu.
 
-SSH connections use your existing SSH config and keys — make sure you can `ssh <host>` without a password prompt for each configured machine.
+SSH connections use your existing SSH config and keys — make sure you can `ssh <host>` without a password prompt for each configured machine. See [Setting up passwordless SSH](#setting-up-passwordless-ssh) for instructions.
 
 ## Dependencies
 
@@ -45,7 +45,7 @@ The resulting `.deb` file will be in `build/deb/`.
 ## Installing
 
 ```bash
-sudo dpkg -i build/deb/remote-update-tray_1.0.0-1_all.deb
+sudo dpkg -i build/deb/remote-update-tray_*.deb
 ```
 
 If dependencies are missing, fix them with:
@@ -68,4 +68,53 @@ remote-update-tray
 
 ```bash
 sudo apt remove remote-update-tray
+```
+
+## Setting up passwordless SSH
+
+The app connects to remote machines using your existing SSH configuration. Each host must be reachable via `ssh <host>` without a password prompt.
+
+**1. Generate an SSH key (if you don't have one):**
+
+```bash
+ssh-keygen -t ed25519
+```
+
+Accept the default path (`~/.ssh/id_ed25519`). You can leave the passphrase empty for fully unattended access, or use `ssh-agent` if you prefer a passphrase.
+
+**2. Copy your public key to the remote machine:**
+
+```bash
+ssh-copy-id user@hostname
+```
+
+Replace `user` with your username on the remote machine. This appends your public key to `~/.ssh/authorized_keys` on the remote.
+
+**3. Test the connection:**
+
+```bash
+ssh user@hostname
+```
+
+It should log in without asking for a password.
+
+**4. Add a host alias (optional but recommended):**
+
+Edit `~/.ssh/config` to define a short alias:
+
+```
+Host myserver
+    HostName 192.168.1.100
+    User user
+    IdentityFile ~/.ssh/id_ed25519
+```
+
+You can then use `myserver` as the host name in the Settings dialog.
+
+**Using `ssh-agent` with a passphrase-protected key:**
+
+If your key has a passphrase, the app won't be able to connect unless `ssh-agent` is running and has the key loaded. GNOME typically starts an agent automatically on login. To add your key:
+
+```bash
+ssh-add ~/.ssh/id_ed25519
 ```

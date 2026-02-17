@@ -1,3 +1,10 @@
+remote-update-tray (1.1.0-1) unstable; urgency=low
+
+  * Add autostart enable/disable checkbox to Settings dialog.
+  * Add About dialog showing version number and usage info.
+
+ -- Johannes Martini <j.martini@web.de>  Mon, 17 Feb 2026 12:00:00 +0100
+
 remote-update-tray (1.0.0-1) unstable; urgency=low
 
   * Initial release.
