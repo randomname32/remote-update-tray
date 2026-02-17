@@ -37,15 +37,15 @@ sudo apt install dpkg-dev debhelper
 Build:
 
 ```bash
-dpkg-buildpackage -us -uc -b
+./build.sh
 ```
 
-The resulting `.deb` file will be in the parent directory (e.g. `../remote-update-tray_1.0.0-1_all.deb`).
+The resulting `.deb` file will be in `build/deb/`.
 
 ## Installing
 
 ```bash
-sudo dpkg -i ../remote-update-tray_1.0.0-1_all.deb
+sudo dpkg -i build/deb/remote-update-tray_1.0.0-1_all.deb
 ```
 
 If dependencies are missing, fix them with:
