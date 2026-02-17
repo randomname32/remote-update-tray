@@ -142,15 +142,18 @@ class SettingsDialog(Gtk.Dialog):
 
         name_entry = Gtk.Entry()
         host_entry = Gtk.Entry()
+        root_check = Gtk.CheckButton(label="Connect as root (no sudo)")
 
         if machine:
             name_entry.set_text(machine["name"])
             host_entry.set_text(machine["host"])
+            root_check.set_active(machine.get("root", False))
 
         box.add(Gtk.Label(label="Name"))
         box.add(name_entry)
         box.add(Gtk.Label(label="Host"))
         box.add(host_entry)
+        box.add(root_check)
 
         dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
         dialog.add_button("Save", Gtk.ResponseType.OK)
@@ -161,12 +164,14 @@ class SettingsDialog(Gtk.Dialog):
         if response == Gtk.ResponseType.OK:
             name = name_entry.get_text()
             host = host_entry.get_text()
+            root = root_check.get_active()
 
             if machine:
                 machine["name"] = name
                 machine["host"] = host
+                machine["root"] = root
             else:
-                self.config["machines"].append({"name": name, "host": host})
+                self.config["machines"].append({"name": name, "host": host, "root": root})
 
             save_config(self.config)
             self.refresh_list()
@@ -207,8 +212,18 @@ class UpdateTray:
 
         for machine in self.config["machines"]:
             item = Gtk.MenuItem(label=f"{machine['name']}: checking...")
-            item.set_sensitive(False)
-            item.show()
+            submenu = Gtk.Menu()
+
+            install_item = Gtk.MenuItem(label="Install updates")
+            install_item.connect("activate", self.install_updates, machine["host"], machine.get("root", False))
+            submenu.append(install_item)
+
+            terminal_item = Gtk.MenuItem(label="Open terminal")
+            terminal_item.connect("activate", self.open_terminal, machine["host"])
+            submenu.append(terminal_item)
+
+            item.set_submenu(submenu)
+            item.show_all()
             self.menu.append(item)
             self.machine_items[machine["host"]] = item
 
@@ -284,6 +299,22 @@ class UpdateTray:
             self.indicator.set_icon("emblem-default")
         else:
             self.indicator.set_icon("software-update-available")
+
+    def install_updates(self, widget, host, root):
+        prefix = "" if root else "sudo "
+        upgrade_cmd = f"{prefix}apt update && {prefix}apt upgrade -y; echo ''; echo 'Done. Press Enter to close.'; read"
+        if host in ("localhost", "127.0.0.1"):
+            cmd = ["gnome-terminal", "--", "bash", "-c", upgrade_cmd]
+        else:
+            cmd = ["gnome-terminal", "--", "ssh", "-t", host, upgrade_cmd]
+        subprocess.Popen(cmd)
+
+    def open_terminal(self, widget, host):
+        if host in ("localhost", "127.0.0.1"):
+            cmd = ["gnome-terminal"]
+        else:
+            cmd = ["gnome-terminal", "--", "ssh", host]
+        subprocess.Popen(cmd)
 
     def quit(self, *_):
         Gtk.main_quit()
