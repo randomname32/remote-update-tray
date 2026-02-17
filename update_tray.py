@@ -27,7 +27,7 @@ def ensure_config():
         os.makedirs(CONFIG_DIR)
 
     if not os.path.exists(CONFIG_FILE):
-        default = {"machines": []}
+        default = {"machines": [{"name": "localhost", "host": "localhost", "root": False}]}
         with open(CONFIG_FILE, "w") as f:
             json.dump(default, f, indent=4)
 
