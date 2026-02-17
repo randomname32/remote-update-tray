@@ -64,6 +64,10 @@ remote-update-tray
 
 **Note:** The app must be run from the system Python environment, not from a conda or virtualenv. It depends on the GObject Introspection bindings (`gi`), which are installed as system packages and not available inside conda environments.
 
+## License
+
+MIT License — see [LICENSE](LICENSE) for details.
+
 ## Uninstalling
 
 ```bash

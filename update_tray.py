@@ -327,7 +327,8 @@ class UpdateTray:
             "  • Green check — all machines up to date\n"
             "  • Package icon — updates available\n"
             "  • Warning — one or more machines unreachable\n\n"
-            "Manage machines and autostart via the Settings menu."
+            "Manage machines and autostart via the Settings menu.\n\n"
+            "Released under the MIT License."
         )
         dialog.run()
         dialog.destroy()
