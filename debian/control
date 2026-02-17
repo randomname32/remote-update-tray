@@ -1,0 +1,13 @@
+Source: remote-update-tray
+Section: utils
+Priority: optional
+Maintainer: Johannes Martini <j.martini@web.de>
+Build-Depends: debhelper (>= 10)
+Standards-Version: 4.1.2
+
+Package: remote-update-tray
+Architecture: all
+Depends: python3, gir1.2-ayatanaappindicator3-0.1, gir1.2-gtk-3.0, gnome-terminal, openssh-client
+Description: System tray indicator for remote update status
+ A lightweight system tray applet that monitors remote machines
+ for available updates via SSH.

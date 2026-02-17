@@ -1,0 +1,3 @@
+update_tray.py usr/lib/remote-update-tray/
+remote-update-tray usr/bin/
+remote-update-tray.desktop etc/xdg/autostart/

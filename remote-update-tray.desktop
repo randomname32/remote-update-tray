@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Remote Update Tray
+Exec=/usr/bin/remote-update-tray
+Icon=software-update-available
+Terminal=false
+X-GNOME-Autostart-enabled=true
+Comment=System tray indicator for remote update status
