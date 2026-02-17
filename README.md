@@ -62,6 +62,8 @@ The applet autostarts on login. To start it manually:
 remote-update-tray
 ```
 
+**Note:** The app must be run from the system Python environment, not from a conda or virtualenv. It depends on the GObject Introspection bindings (`gi`), which are installed as system packages and not available inside conda environments.
+
 ## Uninstalling
 
 ```bash
