@@ -94,7 +94,7 @@ def check_updates(host):
         if result.returncode not in (0, 1):
             return -1  # unexpected error
 
-        lines = [l for l in result.stdout.strip().split("\n") if l]
+        lines = [l for l in result.stdout.strip().split("\n") if l and "/" in l]
         return len(lines)
 
     except Exception:
