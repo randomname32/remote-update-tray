@@ -265,6 +265,23 @@ class UpdateTray:
 
         self.machine_items = {}
 
+        update_all_item = Gtk.MenuItem(label="Update all")
+        update_all_submenu = Gtk.Menu()
+
+        configured_item = Gtk.MenuItem(label="update as configured")
+        configured_item.connect("activate", self.update_all_machines, False)
+        update_all_submenu.append(configured_item)
+
+        yes_item = Gtk.MenuItem(label="force auto-confirm")
+        yes_item.connect("activate", self.update_all_machines, True)
+        update_all_submenu.append(yes_item)
+
+        update_all_item.set_submenu(update_all_submenu)
+        update_all_item.show_all()
+        self.menu.append(update_all_item)
+
+        self.menu.append(Gtk.SeparatorMenuItem())
+
         for machine in self.config["machines"]:
             item = Gtk.MenuItem(label=f"{machine['name']}: checking...")
             submenu = Gtk.Menu()
@@ -394,6 +411,11 @@ class UpdateTray:
             self.indicator.set_icon_full("emblem-default", "Up to date")
         else:
             self.indicator.set_icon_full("software-update-available", "Updates available")
+
+    def update_all_machines(self, widget, force_yes):
+        for machine in self.config["machines"]:
+            auto_yes = True if force_yes else machine.get("auto_yes", True)
+            self.install_updates(None, machine["host"], machine.get("root", False), auto_yes=auto_yes)
 
     def install_updates(self, widget, host, root, auto_yes=True):
         prefix = "" if root else "sudo "

@@ -1,3 +1,10 @@
+remote-update-tray (1.3.0-1) unstable; urgency=low
+
+  * Add "Update all" submenu to upgrade all tracked machines at once,
+    with "update as configured" and "force auto-confirm" options.
+
+ -- Johannes Martini <j.martini@web.de>  Sun, 21 Jun 2026 12:00:00 +0200
+
 remote-update-tray (1.2.1-1) unstable; urgency=low
 
   * Fix false "1 update" shown for localhost when no updates are available.
