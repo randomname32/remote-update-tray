@@ -80,34 +80,57 @@ def set_autostart_enabled(enabled):
 # so they only count as "held", not as available updates.
 APT_SIMULATE = "LANG=C apt-get -s upgrade 2>/dev/null"
 
+# Snaps and Flatpaks are checked on every machine that has them installed.
+CHECK_SCRIPT = (
+    APT_SIMULATE + "; "
+    "echo @@SNAP; command -v snap >/dev/null && LANG=C snap refresh --list 2>&1; "
+    "echo @@FLATPAK; command -v flatpak >/dev/null && "
+    "flatpak remote-ls --updates --columns=application 2>/dev/null; true"
+)
+
 
 def check_updates(host):
-    """Return (installable, held), or (-1, 0) on error."""
+    """Return (installable, held, detail), or (-1, 0, "") on error.
+
+    installable counts apt, snap and flatpak updates; detail names the
+    snap/flatpak share, e.g. "snap 3, flatpak 2" (empty if there is none).
+    """
     try:
         if host in ("localhost", "127.0.0.1"):
-            cmd = ["bash", "-c", APT_SIMULATE]
+            cmd = ["bash", "-c", CHECK_SCRIPT]
         else:
-            cmd = ["ssh", host, APT_SIMULATE]
+            cmd = ["ssh", host, CHECK_SCRIPT]
 
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=20,
+            timeout=60,
         )
 
         if result.returncode == 255:
-            return -1, 0  # SSH connection failure
+            return -1, 0, ""  # SSH connection failure
 
-        summary = re.search(r"(\d+) upgraded, .* (\d+) not upgraded", result.stdout)
-        if result.returncode != 0 or not summary:
-            return -1, 0  # unexpected error
+        apt_out, _, rest = result.stdout.partition("@@SNAP")
+        snap_out, _, flatpak_out = rest.partition("@@FLATPAK")
 
-        installable = sum(1 for l in result.stdout.splitlines() if l.startswith("Inst "))
-        return installable, int(summary.group(2))
+        summary = re.search(r"(\d+) upgraded, .* (\d+) not upgraded", apt_out)
+        if not summary:
+            return -1, 0, ""  # unexpected error
+
+        installable = sum(1 for l in apt_out.splitlines() if l.startswith("Inst "))
+
+        # "snap refresh --list" prints a table with a "Name" header, or
+        # "All snaps up to date."
+        snap_lines = snap_out.strip().splitlines()
+        snaps = len(snap_lines) - 1 if snap_lines and snap_lines[0].startswith("Name") else 0
+        flatpaks = len([l for l in flatpak_out.splitlines() if l.strip()])
+
+        detail = ", ".join(f"{name} {n}" for name, n in (("snap", snaps), ("flatpak", flatpaks)) if n)
+        return installable + snaps + flatpaks, int(summary.group(2)), detail
 
     except Exception:
-        return -1, 0
+        return -1, 0, ""
 
 
 # =========================
@@ -385,7 +408,7 @@ class UpdateTray:
         error = False
 
         for machine in self.config["machines"]:
-            count, held = check_updates(machine["host"])
+            count, held, detail = check_updates(machine["host"])
 
             GLib.idle_add(
                 self.update_menu_item,
@@ -393,6 +416,7 @@ class UpdateTray:
                 machine["name"],
                 count,
                 held,
+                detail,
             )
 
             if count == -1:
@@ -402,18 +426,19 @@ class UpdateTray:
 
         GLib.idle_add(self.update_icon, total, error)
 
-    def update_menu_item(self, host, name, count, held=0):
+    def update_menu_item(self, host, name, count, held=0, detail=""):
         item = self.machine_items.get(host)
         if not item:
             return
 
-        held_note = f" ({held} held back)" if held else ""
+        notes = [n for n in (detail, f"{held} held back" if held else "") if n]
+        note = f" ({'; '.join(notes)})" if notes else ""
         if count == -1:
             item.set_label(f"{name}: ERROR")
         elif count == 0:
-            item.set_label(f"{name}: ✓ up to date{held_note}")
+            item.set_label(f"{name}: ✓ up to date{note}")
         else:
-            item.set_label(f"{name}: {count} updates{held_note}")
+            item.set_label(f"{name}: {count} updates{note}")
 
     def update_icon(self, total, error):
         if error:
@@ -431,7 +456,12 @@ class UpdateTray:
     def install_updates(self, widget, host, root, auto_yes=True):
         prefix = "" if root else "sudo "
         yes_flag = "-y " if auto_yes else ""
-        upgrade_cmd = f"{prefix}apt update && {prefix}apt upgrade {yes_flag}; echo ''; echo 'Done. Press Enter to close.'; read"
+        upgrade_cmd = (
+            f"{prefix}apt update && {prefix}apt upgrade {yes_flag}; "
+            f"if command -v snap >/dev/null; then echo; echo '== snap'; {prefix}snap refresh; fi; "
+            f"if command -v flatpak >/dev/null; then echo; echo '== flatpak'; flatpak update {yes_flag}; fi; "
+            "echo ''; echo 'Done. Press Enter to close.'; read"
+        )
         if host in ("localhost", "127.0.0.1"):
             cmd = ["gnome-terminal", "--", "bash", "-c", upgrade_cmd]
         else:

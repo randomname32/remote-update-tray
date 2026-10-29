@@ -1,3 +1,11 @@
+remote-update-tray (1.5.0-1) unstable; urgency=low
+
+  * Also count Snap and Flatpak updates on machines that have them
+    (e.g. "localhost: 17 updates (snap 6, flatpak 11)").
+  * "Install updates" runs snap refresh and flatpak update after apt.
+
+ -- Johannes Martini <j.martini@web.de>  Thu, 29 Oct 2026 23:00:00 +0100
+
 remote-update-tray (1.4.1-1) unstable; urgency=low
 
   * Launcher calls /usr/bin/python3 explicitly, so the tray also starts from

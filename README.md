@@ -8,6 +8,7 @@ A lightweight system tray applet for Ubuntu/GNOME that monitors remote (and loca
 - Checks each configured machine for available `apt` updates every 10 minutes
 - Tray icon reflects overall status: up-to-date, updates available, or connection error
 - Counts only what `apt upgrade` would install; kept-back and phased packages are listed as "held back"
+- Also counts and installs Snap and Flatpak updates on machines that have them
 - Per-machine submenu to install updates or open an SSH terminal
 - Settings dialog to add, edit, and remove machines
 - Supports `localhost` for monitoring the local machine
