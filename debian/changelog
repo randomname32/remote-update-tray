@@ -3,6 +3,8 @@ remote-update-tray (1.6.0-1) unstable; urgency=low
   * Re-check a machine as soon as its update terminal is closed, so the
     menu and the tray icon no longer show "updates available" until the
     next scheduled check.
+  * Only use gnome-terminal --wait if the installed version supports it;
+    otherwise open the update terminal as before, without the re-check.
 
  -- Johannes Martini <j.martini@web.de>  Fri, 30 Oct 2026 00:15:00 +0100
 

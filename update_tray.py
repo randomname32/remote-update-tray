@@ -89,6 +89,24 @@ CHECK_SCRIPT = (
 )
 
 
+_terminal_wait = None
+
+
+def terminal_supports_wait():
+    """True if gnome-terminal has --wait. Older versions reject the option and
+    open no window at all, so without it the re-check after an update is skipped."""
+    global _terminal_wait
+    if _terminal_wait is None:
+        try:
+            help_text = subprocess.run(
+                ["gnome-terminal", "--help-all"], capture_output=True, text=True, timeout=10
+            ).stdout
+            _terminal_wait = "--wait" in help_text
+        except Exception:
+            _terminal_wait = False
+    return _terminal_wait
+
+
 def check_updates(host):
     """Return (installable, held, detail), or (-1, 0, "") on error.
 
@@ -473,14 +491,15 @@ class UpdateTray:
         )
         # --wait keeps gnome-terminal running until the window closes,
         # so the machine can be checked again right after the update
+        wait = ["--wait"] if terminal_supports_wait() else []
         if host in ("localhost", "127.0.0.1"):
-            cmd = ["gnome-terminal", "--wait", "--", "bash", "-c", upgrade_cmd]
+            cmd = ["gnome-terminal", *wait, "--", "bash", "-c", upgrade_cmd]
         else:
-            cmd = ["gnome-terminal", "--wait", "--", "ssh", "-t", host, upgrade_cmd]
+            cmd = ["gnome-terminal", *wait, "--", "ssh", "-t", host, upgrade_cmd]
         proc = subprocess.Popen(cmd)
 
         machine = next((m for m in self.config["machines"] if m["host"] == host), None)
-        if machine:
+        if machine and wait:
             thread = threading.Thread(target=self.recheck_after, args=(proc, machine))
             thread.daemon = True
             thread.start()
