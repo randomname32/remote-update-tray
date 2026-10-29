@@ -1,3 +1,11 @@
+remote-update-tray (1.4.1-1) unstable; urgency=low
+
+  * Launcher calls /usr/bin/python3 explicitly, so the tray also starts from
+    shells where another python3 (pyenv, venv) without python3-gi comes first
+    in PATH.
+
+ -- Johannes Martini <j.martini@web.de>  Thu, 29 Oct 2026 12:30:00 +0100
+
 remote-update-tray (1.4.0-1) unstable; urgency=low
 
   * Count only updates that "apt upgrade" would actually install

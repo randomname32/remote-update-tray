@@ -1,2 +1,2 @@
 #!/bin/sh
-exec python3 /usr/lib/remote-update-tray/update_tray.py "$@"
+exec /usr/bin/python3 /usr/lib/remote-update-tray/update_tray.py "$@"
