@@ -273,6 +273,7 @@ class UpdateTray:
 
     def __init__(self):
         self.config = load_config()
+        self.results = {}  # host -> last update count (-1 = error)
 
         self.indicator = AppIndicator3.Indicator.new(
             APP_NAME,
@@ -404,27 +405,23 @@ class UpdateTray:
         return True
 
     def update_all(self):
-        total = 0
-        error = False
-
         for machine in self.config["machines"]:
-            count, held, detail = check_updates(machine["host"])
+            self.check_machine(machine)
 
-            GLib.idle_add(
-                self.update_menu_item,
-                machine["host"],
-                machine["name"],
-                count,
-                held,
-                detail,
-            )
+    def check_machine(self, machine):
+        """Check one machine and update its menu entry and the tray icon (runs in a thread)."""
+        count, held, detail = check_updates(machine["host"])
+        self.results[machine["host"]] = count
 
-            if count == -1:
-                error = True
-            else:
-                total += count
-
-        GLib.idle_add(self.update_icon, total, error)
+        GLib.idle_add(
+            self.update_menu_item,
+            machine["host"],
+            machine["name"],
+            count,
+            held,
+            detail,
+        )
+        GLib.idle_add(self.update_icon)
 
     def update_menu_item(self, host, name, count, held=0, detail=""):
         item = self.machine_items.get(host)
@@ -440,7 +437,12 @@ class UpdateTray:
         else:
             item.set_label(f"{name}: {count} updates{note}")
 
-    def update_icon(self, total, error):
+    def update_icon(self):
+        # only machines that have been checked count; unchecked ones keep the current icon state
+        counts = [self.results[m["host"]] for m in self.config["machines"] if m["host"] in self.results]
+        error = -1 in counts
+        total = sum(c for c in counts if c > 0)
+
         if error:
             self.indicator.set_icon_full("dialog-warning", "Connection error")
         elif total == 0:
@@ -469,11 +471,29 @@ class UpdateTray:
             f"if command -v flatpak >/dev/null; then echo; echo '== flatpak'; flatpak update {yes_flag}; fi; "
             "echo ''; echo 'Done. Press Enter to close.'; read"
         )
+        # --wait keeps gnome-terminal running until the window closes,
+        # so the machine can be checked again right after the update
         if host in ("localhost", "127.0.0.1"):
-            cmd = ["gnome-terminal", "--", "bash", "-c", upgrade_cmd]
+            cmd = ["gnome-terminal", "--wait", "--", "bash", "-c", upgrade_cmd]
         else:
-            cmd = ["gnome-terminal", "--", "ssh", "-t", host, upgrade_cmd]
-        subprocess.Popen(cmd)
+            cmd = ["gnome-terminal", "--wait", "--", "ssh", "-t", host, upgrade_cmd]
+        proc = subprocess.Popen(cmd)
+
+        machine = next((m for m in self.config["machines"] if m["host"] == host), None)
+        if machine:
+            thread = threading.Thread(target=self.recheck_after, args=(proc, machine))
+            thread.daemon = True
+            thread.start()
+
+    def recheck_after(self, proc, machine):
+        proc.wait()
+        GLib.idle_add(self.set_checking, machine["host"], machine["name"])
+        self.check_machine(machine)
+
+    def set_checking(self, host, name):
+        item = self.machine_items.get(host)
+        if item:
+            item.set_label(f"{name}: checking...")
 
     def open_terminal(self, widget, host):
         if host in ("localhost", "127.0.0.1"):

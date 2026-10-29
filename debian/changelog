@@ -1,3 +1,11 @@
+remote-update-tray (1.6.0-1) unstable; urgency=low
+
+  * Re-check a machine as soon as its update terminal is closed, so the
+    menu and the tray icon no longer show "updates available" until the
+    next scheduled check.
+
+ -- Johannes Martini <j.martini@web.de>  Fri, 30 Oct 2026 00:15:00 +0100
+
 remote-update-tray (1.5.1-1) unstable; urgency=low
 
   * Ask before snap refresh unless auto-confirm is set. snap refresh has no
