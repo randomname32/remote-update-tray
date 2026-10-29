@@ -456,9 +456,16 @@ class UpdateTray:
     def install_updates(self, widget, host, root, auto_yes=True):
         prefix = "" if root else "sudo "
         yes_flag = "-y " if auto_yes else ""
+        # snap refresh has no confirmation prompt of its own, so ask unless auto-confirm is set
+        snap_cmd = f"{prefix}snap refresh" if auto_yes else (
+            "if snap refresh --list 2>/dev/null | grep -q .; then "
+            "snap refresh --list; read -p 'Install these snap updates? [Y/n] ' a; "
+            f"case \"$a\" in [nN]*) echo 'Skipped.';; *) {prefix}snap refresh;; esac; "
+            "else echo 'All snaps up to date.'; fi"
+        )
         upgrade_cmd = (
             f"{prefix}apt update && {prefix}apt upgrade {yes_flag}; "
-            f"if command -v snap >/dev/null; then echo; echo '== snap'; {prefix}snap refresh; fi; "
+            f"if command -v snap >/dev/null; then echo; echo '== snap'; {snap_cmd}; fi; "
             f"if command -v flatpak >/dev/null; then echo; echo '== flatpak'; flatpak update {yes_flag}; fi; "
             "echo ''; echo 'Done. Press Enter to close.'; read"
         )
