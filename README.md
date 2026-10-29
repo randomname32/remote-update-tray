@@ -7,6 +7,7 @@ A lightweight system tray applet for Ubuntu/GNOME that monitors remote (and loca
 - Lives in the system tray using AyatanaAppIndicator
 - Checks each configured machine for available `apt` updates every 10 minutes
 - Tray icon reflects overall status: up-to-date, updates available, or connection error
+- Counts only what `apt upgrade` would install; kept-back and phased packages are listed as "held back"
 - Per-machine submenu to install updates or open an SSH terminal
 - Settings dialog to add, edit, and remove machines
 - Supports `localhost` for monitoring the local machine

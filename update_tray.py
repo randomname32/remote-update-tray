@@ -10,6 +10,7 @@ from gi.repository import AyatanaAppIndicator3 as AppIndicator3
 import os
 import sys
 import json
+import re
 import subprocess
 import threading
 
@@ -74,12 +75,19 @@ def set_autostart_enabled(enabled):
 # SSH CHECK
 # =========================
 
+# Simulate exactly what "apt upgrade" would do. Packages that are kept back
+# (new dependencies) or deferred by phased updates are not installed by it,
+# so they only count as "held", not as available updates.
+APT_SIMULATE = "LANG=C apt-get -s upgrade 2>/dev/null"
+
+
 def check_updates(host):
+    """Return (installable, held), or (-1, 0) on error."""
     try:
         if host in ("localhost", "127.0.0.1"):
-            cmd = ["bash", "-c", "apt list --upgradable 2>/dev/null | grep -v Listing"]
+            cmd = ["bash", "-c", APT_SIMULATE]
         else:
-            cmd = ["ssh", host, "apt list --upgradable 2>/dev/null | grep -v Listing"]
+            cmd = ["ssh", host, APT_SIMULATE]
 
         result = subprocess.run(
             cmd,
@@ -89,16 +97,17 @@ def check_updates(host):
         )
 
         if result.returncode == 255:
-            return -1  # SSH connection failure
+            return -1, 0  # SSH connection failure
 
-        if result.returncode not in (0, 1):
-            return -1  # unexpected error
+        summary = re.search(r"(\d+) upgraded, .* (\d+) not upgraded", result.stdout)
+        if result.returncode != 0 or not summary:
+            return -1, 0  # unexpected error
 
-        lines = [l for l in result.stdout.strip().split("\n") if l and "/" in l]
-        return len(lines)
+        installable = sum(1 for l in result.stdout.splitlines() if l.startswith("Inst "))
+        return installable, int(summary.group(2))
 
     except Exception:
-        return -1
+        return -1, 0
 
 
 # =========================
@@ -376,13 +385,14 @@ class UpdateTray:
         error = False
 
         for machine in self.config["machines"]:
-            count = check_updates(machine["host"])
+            count, held = check_updates(machine["host"])
 
             GLib.idle_add(
                 self.update_menu_item,
                 machine["host"],
                 machine["name"],
                 count,
+                held,
             )
 
             if count == -1:
@@ -392,17 +402,18 @@ class UpdateTray:
 
         GLib.idle_add(self.update_icon, total, error)
 
-    def update_menu_item(self, host, name, count):
+    def update_menu_item(self, host, name, count, held=0):
         item = self.machine_items.get(host)
         if not item:
             return
 
+        held_note = f" ({held} held back)" if held else ""
         if count == -1:
             item.set_label(f"{name}: ERROR")
         elif count == 0:
-            item.set_label(f"{name}: ✓ up to date")
+            item.set_label(f"{name}: ✓ up to date{held_note}")
         else:
-            item.set_label(f"{name}: {count} updates")
+            item.set_label(f"{name}: {count} updates{held_note}")
 
     def update_icon(self, total, error):
         if error:
