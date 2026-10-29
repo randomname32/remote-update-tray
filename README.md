@@ -22,6 +22,7 @@ SSH connections use your existing SSH config and keys — make sure you can `ssh
 ## Dependencies
 
 - `python3`
+- `python3-gi`
 - `gir1.2-ayatanaappindicator3-0.1`
 - `gir1.2-gtk-3.0`
 - `gnome-terminal`
@@ -63,7 +64,7 @@ The applet autostarts on login. To start it manually:
 remote-update-tray
 ```
 
-**Note:** The app must be run from the system Python environment, not from a conda or virtualenv. It depends on the GObject Introspection bindings (`gi`), which are installed as system packages and not available inside conda environments.
+**Note:** The app depends on the GObject Introspection bindings (`gi`, package `python3-gi`), which exist only for the system Python, not inside conda, pyenv or a virtualenv. The `remote-update-tray` launcher therefore calls `/usr/bin/python3` explicitly; when running `update_tray.py` directly from the source tree, use `/usr/bin/python3 update_tray.py`.
 
 ## License
 
