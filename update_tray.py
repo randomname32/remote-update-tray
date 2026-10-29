@@ -3,14 +3,17 @@
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("AyatanaAppIndicator3", "0.1")
+gi.require_version("Vte", "2.91")
 
 from gi.repository import Gtk, Gdk, GLib, Pango
 from gi.repository import AyatanaAppIndicator3 as AppIndicator3
+from gi.repository import Vte
 
 import os
 import sys
 import json
 import re
+import signal
 import subprocess
 import threading
 
@@ -80,31 +83,21 @@ def set_autostart_enabled(enabled):
 # so they only count as "held", not as available updates.
 APT_SIMULATE = "LANG=C apt-get -s upgrade 2>/dev/null"
 
+# Refresh the package lists first, otherwise the check only sees what the
+# daily apt run knew. Needs root or passwordless sudo; without either it
+# silently falls back to the cached lists.
+APT_REFRESH = (
+    '(if [ "$(id -u)" = 0 ]; then apt-get update -qq; '
+    "else sudo -n apt-get update -qq; fi) >/dev/null 2>&1"
+)
+
 # Snaps and Flatpaks are checked on every machine that has them installed.
 CHECK_SCRIPT = (
-    APT_SIMULATE + "; "
+    APT_REFRESH + "; " + APT_SIMULATE + "; "
     "echo @@SNAP; command -v snap >/dev/null && LANG=C snap refresh --list 2>&1; "
     "echo @@FLATPAK; command -v flatpak >/dev/null && "
     "flatpak remote-ls --updates --columns=application 2>/dev/null; true"
 )
-
-
-_terminal_wait = None
-
-
-def terminal_supports_wait():
-    """True if gnome-terminal has --wait. Older versions reject the option and
-    open no window at all, so without it the re-check after an update is skipped."""
-    global _terminal_wait
-    if _terminal_wait is None:
-        try:
-            help_text = subprocess.run(
-                ["gnome-terminal", "--help-all"], capture_output=True, text=True, timeout=10
-            ).stdout
-            _terminal_wait = "--wait" in help_text
-        except Exception:
-            _terminal_wait = False
-    return _terminal_wait
 
 
 def check_updates(host):
@@ -123,7 +116,7 @@ def check_updates(host):
             cmd,
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=120,
         )
 
         if result.returncode == 255:
@@ -198,6 +191,17 @@ CSS = b"""
 .empty-hint {
     padding: 24px;
     opacity: 0.65;
+}
+.update-sidebar row {
+    padding: 8px 12px;
+}
+.attention {
+    color: @theme_selected_bg_color;
+    font-weight: bold;
+    opacity: 1;
+}
+.update-sidebar row:selected .attention {
+    color: inherit;
 }
 """
 
@@ -466,6 +470,297 @@ class SettingsDialog(Gtk.Dialog):
 
 
 # =========================
+# UPDATE WINDOW
+# =========================
+
+# The line the cursor sits on, once the output has paused, looks like one of
+# these when a process waits for input: apt/flatpak/our snap "[Y/n]", the
+# German apt "[J/n]", sudo and ssh password prompts, or any question.
+PROMPT_RE = re.compile(
+    r"(\[[YyJj]/[Nn]\]|\(y/n\)|pass(word|wort|phrase)[^\n]*:|\?)\s*:?\s*$",
+    re.IGNORECASE,
+)
+PROMPT_IDLE_MS = 700  # output must have paused this long before a prompt counts
+
+
+class UpdateWindow(Gtk.Window):
+    """All running updates in one window: machines with their state on the
+    left, the selected machine's terminal (a real VTE terminal, so prompts
+    and sudo passwords work) on the right."""
+
+    def __init__(self, on_finished, on_change=lambda: None):
+        super().__init__(title="Updates")
+        load_css()
+        self.on_finished = on_finished  # called with the machine after its update ended
+        self.on_change = on_change  # called whenever a machine's state changes (for the tray)
+        self.jobs = {}  # host -> job dict
+        self.set_default_size(980, 620)
+        self.set_icon_name("software-update-available")
+
+        self.header = Gtk.HeaderBar(title="Updates", show_close_button=True)
+        self.set_titlebar(self.header)
+
+        self.sidebar = add_class(Gtk.ListBox(selection_mode=Gtk.SelectionMode.SINGLE), "update-sidebar")
+        self.sidebar.connect("row-selected", self.on_row_selected)
+        side_scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
+        side_scroll.set_size_request(210, -1)
+        side_scroll.add(self.sidebar)
+
+        self.stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE)
+
+        paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
+        paned.pack1(side_scroll, False, False)
+        paned.pack2(self.stack, True, False)
+        self.add(paned)
+
+        self.connect("delete-event", self.on_delete)
+
+    def running(self):
+        return [job for job in self.jobs.values() if job["running"]]
+
+    def state_of(self, host):
+        """"waiting", "running" or None (no update running for that host)."""
+        job = self.jobs.get(host)
+        if not job or not job["running"]:
+            return None
+        return "waiting" if job["waiting"] else "running"
+
+    def add_job(self, machine, argv, select=True):
+        host = machine["host"]
+        job = self.jobs.get(host)
+
+        if job and job["running"]:
+            # no second process; just bring the running one into view
+            if select:
+                self.select(host)
+            self.present()
+            return
+
+        if not job:
+            job = self.create_job(machine)
+            self.jobs[host] = job
+        else:
+            job["terminal"].reset(True, True)
+        job["machine"] = machine
+
+        job["running"] = True
+        job["cancelled"] = False
+        job["pid"] = None
+        self.set_state(job, "running")
+        job["terminal"].spawn_async(
+            Vte.PtyFlags.DEFAULT,
+            os.path.expanduser("~"),
+            argv,
+            None,
+            GLib.SpawnFlags.SEARCH_PATH,
+            None, None,
+            -1,
+            None,
+            self.on_spawned,
+            host,
+        )
+
+        self.show_all()
+        if select or self.sidebar.get_selected_row() is None:
+            self.select(host)
+        self.present()
+
+    def create_job(self, machine):
+        spinner = Gtk.Spinner()
+        icon = Gtk.Image()
+        waiting_icon = Gtk.Image.new_from_icon_name("dialog-question-symbolic", Gtk.IconSize.BUTTON)
+        state_stack = Gtk.Stack()
+        state_stack.add_named(spinner, "running")
+        state_stack.add_named(icon, "finished")
+        state_stack.add_named(waiting_icon, "waiting")
+        state_stack.show_all()  # a stack only switches to children that are visible
+
+        name = add_class(Gtk.Label(label=machine["name"], xalign=0), "row-title")
+        name.set_ellipsize(Pango.EllipsizeMode.END)
+        status = add_class(Gtk.Label(xalign=0), "row-subtitle")
+
+        text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        text.pack_start(name, False, False, 0)
+        text.pack_start(status, False, False, 0)
+
+        hbox = Gtk.Box(spacing=10)
+        hbox.pack_start(state_stack, False, False, 0)
+        hbox.pack_start(text, True, True, 0)
+
+        row = Gtk.ListBoxRow()
+        row.host = machine["host"]
+        row.add(hbox)
+        self.sidebar.add(row)
+
+        terminal = Vte.Terminal()
+        terminal.set_scrollback_lines(10000)
+        terminal.connect("child-exited", self.on_child_exited, machine["host"])
+        terminal.connect("contents-changed", self.on_contents_changed, machine["host"])
+        terminal.connect("commit", self.on_commit, machine["host"])
+        term_scroll = Gtk.ScrolledWindow()
+        term_scroll.add(terminal)
+        self.stack.add_named(term_scroll, machine["host"])
+
+        return {
+            "row": row, "terminal": terminal, "spinner": spinner, "icon": icon,
+            "state_stack": state_stack, "status": status, "running": False,
+            "waiting": False, "prompt_timer": None, "pid": None, "cancelled": False,
+            "result": None,
+        }
+
+    def set_state(self, job, state, exit_code=0):
+        job["waiting"] = state == "waiting"
+        job["status"].get_style_context().remove_class("attention")
+        if state == "running":
+            job["spinner"].start()
+            job["state_stack"].set_visible_child_name("running")
+            job["status"].set_text("Updating…")
+        elif state == "waiting":
+            job["spinner"].stop()
+            job["state_stack"].set_visible_child_name("waiting")
+            job["status"].set_text("Waiting for input")
+            job["status"].get_style_context().add_class("attention")
+        elif state == "cancelling":
+            job["status"].set_text("Cancelling…")
+        else:
+            job["spinner"].stop()
+            if state == "cancelled":
+                job["result"], icon_name, text = "cancelled", "process-stop-symbolic", "Cancelled"
+            elif exit_code == 0:
+                job["result"], icon_name, text = "done", "emblem-ok-symbolic", "Done"
+            else:
+                job["result"], icon_name, text = "failed", "dialog-error-symbolic", f"Failed (exit {exit_code})"
+            job["icon"].set_from_icon_name(icon_name, Gtk.IconSize.BUTTON)
+            job["state_stack"].set_visible_child_name("finished")
+            job["status"].set_text(text)
+        self.update_header()
+        self.on_change()
+
+    def update_header(self):
+        jobs = list(self.jobs.values())
+        self.header.set_subtitle(self.summary(include_finished=True))
+        # flags the window in the dock/taskbar while something waits for an answer
+        self.set_urgency_hint(any(j["running"] and j["waiting"] for j in self.jobs.values()))
+
+    def summary(self, include_finished=False):
+        """e.g. "1 waiting for input · 2 running · 3 done"."""
+        jobs = list(self.jobs.values())
+        counts = [
+            (sum(1 for j in jobs if j["running"] and j["waiting"]), "waiting for input"),
+            (sum(1 for j in jobs if j["running"] and not j["waiting"]), "running"),
+        ]
+        if include_finished:
+            for result in ("done", "failed", "cancelled"):
+                counts.append((sum(1 for j in jobs if not j["running"] and j["result"] == result), result))
+        return " · ".join(f"{n} {label}" for n, label in counts if n)
+
+    def on_contents_changed(self, terminal, host):
+        # check for a prompt only once the output has paused, not on every line
+        job = self.jobs[host]
+        if job["prompt_timer"]:
+            GLib.source_remove(job["prompt_timer"])
+        job["prompt_timer"] = GLib.timeout_add(PROMPT_IDLE_MS, self.check_prompt, host)
+
+    def check_prompt(self, host):
+        job = self.jobs[host]
+        job["prompt_timer"] = None
+        if job["running"]:
+            terminal = job["terminal"]
+            col, row = terminal.get_cursor_position()
+            line = terminal.get_text_range_format(Vte.Format.TEXT, row, 0, row, terminal.get_column_count())[0] or ""
+            waiting = bool(PROMPT_RE.search(line.rstrip("\n")))
+            if waiting != job["waiting"]:
+                self.set_state(job, "waiting" if waiting else "running")
+        return False
+
+    def on_commit(self, terminal, text, size, host):
+        # the user typed something: the prompt is being answered
+        job = self.jobs[host]
+        if job["running"] and job["waiting"]:
+            self.set_state(job, "running")
+
+    def select(self, host):
+        self.sidebar.select_row(self.jobs[host]["row"])
+
+    def on_row_selected(self, listbox, row):
+        if row is not None:
+            self.stack.set_visible_child_name(row.host)
+            self.jobs[row.host]["terminal"].grab_focus()
+
+    def on_spawned(self, terminal, pid, error, host):
+        job = self.jobs[host]
+        job["pid"] = pid
+        if error is not None:
+            job["running"] = False
+            terminal.feed(f"\r\nCould not start: {error.message}\r\n".encode())
+            self.set_state(job, "finished", exit_code=-1)
+
+    def on_child_exited(self, terminal, wait_status, host):
+        job = self.jobs[host]
+        job["running"] = False
+        job["waiting"] = False
+        if job["cancelled"]:
+            self.set_state(job, "cancelled")
+        else:
+            self.set_state(job, "finished", exit_code=os.waitstatus_to_exitcode(wait_status))
+        self.on_finished(job["machine"])
+
+        # closed while updates were running: go away once the last one is done
+        if not self.get_visible() and not self.running():
+            self.destroy()
+
+    def cancel(self, job):
+        """Stop a job that waits for input. At a [Y/n] or password prompt
+        nothing has been installed yet, so this is safe."""
+        job["cancelled"] = True
+        self.set_state(job, "cancelling")
+        try:
+            # the child leads its own process group (VTE starts it in a new
+            # session), so this reaches sudo/apt as well as bash or ssh
+            os.killpg(job["pid"], signal.SIGHUP)
+        except (ProcessLookupError, TypeError):
+            pass
+
+    def on_delete(self, *_):
+        running = self.running()
+        if not running:
+            return False
+
+        # Prompts are cancelled: nothing has been installed at that point.
+        # Updates that are installing keep running in the background, since
+        # killing apt/dpkg halfway can break a system; the tray shows them.
+        waiting = [j for j in running if j["waiting"]]
+        installing = [j for j in running if not j["waiting"]]
+        if waiting:
+            names = lambda jobs: ", ".join(j["machine"]["name"] for j in jobs)
+            lines = [f"Waiting for input, will be cancelled: {names(waiting)}."]
+            if installing:
+                lines.append(f"Still installing, keeps running in the background: {names(installing)}.")
+            dialog = Gtk.MessageDialog(
+                transient_for=self,
+                flags=0,
+                message_type=Gtk.MessageType.QUESTION,
+                buttons=Gtk.ButtonsType.NONE,
+                text="Close the update window?",
+            )
+            dialog.format_secondary_text("\n".join(lines))
+            dialog.add_button("Keep Open", Gtk.ResponseType.CANCEL)
+            dialog.add_button("Cancel Prompts & Close" if installing else "Cancel Updates & Close",
+                              Gtk.ResponseType.OK)
+            dialog.set_default_response(Gtk.ResponseType.CANCEL)
+            response = dialog.run()
+            dialog.destroy()
+            if response != Gtk.ResponseType.OK:
+                return True
+            for job in waiting:
+                self.cancel(job)
+
+        # hidden until the last job has ended, then on_child_exited destroys it
+        self.hide()
+        return True
+
+
+# =========================
 # TRAY APP
 # =========================
 
@@ -474,6 +769,7 @@ class UpdateTray:
     def __init__(self):
         self.config = load_config()
         self.results = {}  # host -> last update count (-1 = error)
+        self.update_window = None
 
         self.indicator = AppIndicator3.Indicator.new(
             APP_NAME,
@@ -512,6 +808,12 @@ class UpdateTray:
         update_all_item.set_submenu(update_all_submenu)
         update_all_item.show_all()
         self.menu.append(update_all_item)
+
+        # only visible while the update window exists (it may be hidden with updates running)
+        self.window_item = Gtk.MenuItem(label="Show update window")
+        self.window_item.connect("activate", self.show_update_window)
+        self.menu.append(self.window_item)
+        self.window_item.set_visible(self.update_window is not None)
 
         self.menu.append(Gtk.SeparatorMenuItem())
 
@@ -627,6 +929,8 @@ class UpdateTray:
         item = self.machine_items.get(host)
         if not item:
             return
+        if self.job_state(host):
+            return  # an update is running there; on_jobs_changed owns the label until it ends
 
         notes = [n for n in (detail, f"{held} held back" if held else "") if n]
         note = f" ({'; '.join(notes)})" if notes else ""
@@ -642,8 +946,14 @@ class UpdateTray:
         counts = [self.results[m["host"]] for m in self.config["machines"] if m["host"] in self.results]
         error = -1 in counts
         total = sum(c for c in counts if c > 0)
+        states = [self.job_state(m["host"]) for m in self.config["machines"]]
 
-        if error:
+        # running updates come first: they need attention, or at least must not be forgotten
+        if "waiting" in states:
+            self.indicator.set_icon_full("dialog-question", "An update is waiting for input")
+        elif "running" in states:
+            self.indicator.set_icon_full("emblem-synchronizing", "Updates running")
+        elif error:
             self.indicator.set_icon_full("dialog-warning", "Connection error")
         elif total == 0:
             self.indicator.set_icon_full("emblem-default", "Up to date")
@@ -651,11 +961,13 @@ class UpdateTray:
             self.indicator.set_icon_full("software-update-available", "Updates available")
 
     def update_all_machines(self, widget, force_yes):
-        for machine in self.config["machines"]:
+        for i, machine in enumerate(self.config["machines"]):
             auto_yes = True if force_yes else machine.get("auto_yes", True)
-            self.install_updates(None, machine["host"], machine.get("root", False), auto_yes=auto_yes)
+            # show the first machine; the others run alongside in the sidebar
+            self.install_updates(None, machine["host"], machine.get("root", False),
+                                 auto_yes=auto_yes, select=(i == 0))
 
-    def install_updates(self, widget, host, root, auto_yes=True):
+    def install_updates(self, widget, host, root, auto_yes=True, select=True):
         prefix = "" if root else "sudo "
         yes_flag = "-y " if auto_yes else ""
         # snap refresh has no confirmation prompt of its own, so ask unless auto-confirm is set
@@ -665,31 +977,63 @@ class UpdateTray:
             f"case \"$a\" in [nN]*) echo 'Skipped.';; *) {prefix}snap refresh;; esac; "
             "else echo 'All snaps up to date.'; fi"
         )
+        # the exit code tells the update window whether it worked
         upgrade_cmd = (
-            f"{prefix}apt update && {prefix}apt upgrade {yes_flag}; "
-            f"if command -v snap >/dev/null; then echo; echo '== snap'; {snap_cmd}; fi; "
-            f"if command -v flatpak >/dev/null; then echo; echo '== flatpak'; flatpak update {yes_flag}; fi; "
-            "echo ''; echo 'Done. Press Enter to close.'; read"
+            "rc=0; "
+            f"{{ {prefix}apt update && {prefix}apt upgrade {yes_flag}; }} || rc=$?; "
+            f"if command -v snap >/dev/null; then echo; echo '== snap'; {{ {snap_cmd}; }} || rc=$?; fi; "
+            f"if command -v flatpak >/dev/null; then echo; echo '== flatpak'; flatpak update {yes_flag}|| rc=$?; fi; "
+            "echo; if [ $rc = 0 ]; then echo 'Done.'; else echo \"Finished with errors (exit $rc).\"; fi; "
+            "exit $rc"
         )
-        # --wait keeps gnome-terminal running until the window closes,
-        # so the machine can be checked again right after the update
-        wait = ["--wait"] if terminal_supports_wait() else []
         if host in ("localhost", "127.0.0.1"):
-            cmd = ["gnome-terminal", *wait, "--", "bash", "-c", upgrade_cmd]
+            argv = ["bash", "-c", upgrade_cmd]
         else:
-            cmd = ["gnome-terminal", *wait, "--", "ssh", "-t", host, upgrade_cmd]
-        proc = subprocess.Popen(cmd)
+            argv = ["ssh", "-t", host, upgrade_cmd]
 
-        machine = next((m for m in self.config["machines"] if m["host"] == host), None)
-        if machine and wait:
-            thread = threading.Thread(target=self.recheck_after, args=(proc, machine))
-            thread.daemon = True
-            thread.start()
+        machine = next((m for m in self.config["machines"] if m["host"] == host), {"name": host, "host": host})
+        self.get_update_window().add_job(machine, argv, select=select)
 
-    def recheck_after(self, proc, machine):
-        proc.wait()
-        GLib.idle_add(self.set_checking, machine["host"], machine["name"])
-        self.check_machine(machine)
+    def get_update_window(self):
+        if self.update_window is None:
+            self.update_window = UpdateWindow(on_finished=self.on_update_finished,
+                                              on_change=self.on_jobs_changed)
+            self.update_window.connect("destroy", self.on_update_window_destroyed)
+            self.window_item.show()
+        return self.update_window
+
+    def job_state(self, host):
+        return self.update_window.state_of(host) if self.update_window else None
+
+    def on_jobs_changed(self):
+        """Mirror the update window in the menu and the icon, so running
+        updates stay visible while the window is hidden."""
+        for machine in self.config["machines"]:
+            state = self.job_state(machine["host"])
+            item = self.machine_items.get(machine["host"])
+            if item and state:
+                item.set_label(f"{machine['name']}: "
+                               + ("❓ waiting for input" if state == "waiting" else "⟳ updating…"))
+        summary = self.update_window.summary() if self.update_window else ""
+        self.window_item.set_label(f"Show update window ({summary})" if summary else "Show update window")
+        self.update_icon()
+
+    def show_update_window(self, *_):
+        if self.update_window is not None:
+            self.update_window.show_all()
+            self.update_window.present()
+
+    def on_update_window_destroyed(self, *_):
+        self.update_window = None
+        self.window_item.set_label("Show update window")
+        self.window_item.hide()
+        self.update_icon()
+
+    def on_update_finished(self, machine):
+        self.set_checking(machine["host"], machine["name"])
+        thread = threading.Thread(target=self.check_machine, args=(machine,))
+        thread.daemon = True
+        thread.start()
 
     def set_checking(self, host, name):
         item = self.machine_items.get(host)
@@ -704,6 +1048,30 @@ class UpdateTray:
         subprocess.Popen(cmd)
 
     def quit(self, *_):
+        # quitting kills the update processes in the window; mid-dpkg that can break a system
+        running = self.update_window.running() if self.update_window else []
+        if running:
+            names = ", ".join(job["machine"]["name"] for job in running)
+            dialog = Gtk.MessageDialog(
+                transient_for=self.update_window,
+                flags=0,
+                message_type=Gtk.MessageType.WARNING,
+                buttons=Gtk.ButtonsType.NONE,
+                text="Updates are still running",
+            )
+            dialog.format_secondary_text(
+                f"Quitting stops them: {names}.\n"
+                "Interrupting apt or dpkg halfway can leave a system broken."
+            )
+            dialog.add_button("Show Updates", Gtk.ResponseType.CANCEL)
+            quit_button = dialog.add_button("Quit Anyway", Gtk.ResponseType.OK)
+            add_class(quit_button, "destructive-action")
+            dialog.set_default_response(Gtk.ResponseType.CANCEL)
+            response = dialog.run()
+            dialog.destroy()
+            if response != Gtk.ResponseType.OK:
+                self.show_update_window()
+                return
         Gtk.main_quit()
 
 

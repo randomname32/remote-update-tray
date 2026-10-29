@@ -1,3 +1,28 @@
+remote-update-tray (1.8.0-1) unstable; urgency=low
+
+  * Updates run in a single window instead of one gnome-terminal per
+    machine: a sidebar shows each machine with its state (running, done,
+    failed with exit code), the right side its built-in terminal (VTE).
+    Prompts and sudo passwords work as before.
+  * The machine is re-checked as soon as its update process ends.
+  * Closing the window cancels updates that wait for input (after asking),
+    since nothing is installed at a prompt yet. Updates that are installing
+    keep running in the background; "Show update window" brings it back.
+  * While updates run, the tray mirrors them: the machine's menu entry
+    shows "updating…" or "waiting for input", the icon turns into a
+    sync or question icon, and "Show update window" names the counts.
+  * The sidebar marks machines that wait for input (apt/flatpak [Y/n],
+    sudo or ssh passwords, other questions) with a question mark and
+    "Waiting for input"; the window gets the urgency hint meanwhile.
+  * The check refreshes the package lists first (as root or with
+    passwordless sudo), so updates published after the daily apt run
+    show up too.
+  * Quit asks for confirmation while updates are running, since quitting
+    stops them.
+  * New dependency: gir1.2-vte-2.91.
+
+ -- Johannes Martini <j.martini@web.de>  Fri, 30 Oct 2026 01:30:00 +0100
+
 remote-update-tray (1.7.0-1) unstable; urgency=low
 
   * Redesigned settings in the style of the GNOME settings: header bar with

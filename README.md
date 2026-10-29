@@ -9,6 +9,7 @@ A lightweight system tray applet for Ubuntu/GNOME that monitors remote (and loca
 - Tray icon reflects overall status: up-to-date, updates available, or connection error
 - Counts only what `apt upgrade` would install; kept-back and phased packages are listed as "held back"
 - Also counts and installs Snap and Flatpak updates on machines that have them
+- Updates run in one window with a sidebar per machine (state: running, done, failed) and a built-in terminal, so prompts and sudo passwords work; each machine is re-checked as soon as its update ends
 - Per-machine submenu to install updates or open an SSH terminal
 - Settings dialog to add, edit, and remove machines
 - Supports `localhost` for monitoring the local machine
@@ -26,6 +27,7 @@ SSH connections use your existing SSH config and keys — make sure you can `ssh
 - `python3-gi`
 - `gir1.2-ayatanaappindicator3-0.1`
 - `gir1.2-gtk-3.0`
+- `gir1.2-vte-2.91`
 - `gnome-terminal`
 - `openssh-client`
 
