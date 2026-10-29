@@ -1,3 +1,14 @@
+remote-update-tray (1.7.0-1) unstable; urgency=low
+
+  * Redesigned settings in the style of the GNOME settings: header bar with
+    an add button, rounded grouped lists, two-line machine rows with
+    root/auto-confirm badges, icon buttons and switches. Works in light
+    and dark mode.
+  * Removing a machine asks for confirmation; Save in the machine editor
+    stays disabled until name and host are filled in.
+
+ -- Johannes Martini <j.martini@web.de>  Fri, 30 Oct 2026 00:45:00 +0100
+
 remote-update-tray (1.6.0-1) unstable; urgency=low
 
   * Re-check a machine as soon as its update terminal is closed, so the

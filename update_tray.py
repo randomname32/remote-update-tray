@@ -4,7 +4,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("AyatanaAppIndicator3", "0.1")
 
-from gi.repository import Gtk, GLib
+from gi.repository import Gtk, Gdk, GLib, Pango
 from gi.repository import AyatanaAppIndicator3 as AppIndicator3
 
 import os
@@ -155,71 +155,215 @@ def check_updates(host):
 # SETTINGS DIALOG
 # =========================
 
+# GNOME-settings look in plain GTK 3: rounded "boxed" lists, two-line rows,
+# pill badges. Colors come from the theme, so light and dark mode both work.
+CSS = b"""
+.boxed-list {
+    background-color: @theme_base_color;
+    border: 1px solid @borders;
+    border-radius: 12px;
+}
+.boxed-list row {
+    padding: 10px 12px;
+}
+.boxed-list row:first-child {
+    border-top-left-radius: 12px;
+    border-top-right-radius: 12px;
+}
+.boxed-list row:last-child {
+    border-bottom-left-radius: 12px;
+    border-bottom-right-radius: 12px;
+}
+.section-title {
+    font-weight: bold;
+    margin: 18px 6px 8px 6px;
+}
+.row-title {
+    font-weight: bold;
+}
+.row-subtitle {
+    font-size: 0.9em;
+    opacity: 0.65;
+}
+.badge {
+    border-radius: 999px;
+    padding: 1px 8px;
+    font-size: 0.8em;
+    background-color: alpha(@theme_fg_color, 0.08);
+}
+.badge.accent {
+    background-color: alpha(@theme_selected_bg_color, 0.15);
+    color: @theme_selected_bg_color;
+}
+.empty-hint {
+    padding: 24px;
+    opacity: 0.65;
+}
+"""
+
+_css_loaded = False
+
+
+def load_css():
+    global _css_loaded
+    if _css_loaded:
+        return
+    provider = Gtk.CssProvider()
+    provider.load_from_data(CSS)
+    Gtk.StyleContext.add_provider_for_screen(
+        Gdk.Screen.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+    )
+    _css_loaded = True
+
+
+def add_class(widget, *names):
+    for name in names:
+        widget.get_style_context().add_class(name)
+    return widget
+
+
+def separator_header(row, before):
+    if before and not row.get_header():
+        row.set_header(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+
+
+def boxed_list():
+    listbox = add_class(Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE), "boxed-list")
+    listbox.set_header_func(separator_header)
+    return listbox
+
+
+def section_title(text):
+    return add_class(Gtk.Label(label=text, xalign=0), "section-title")
+
+
+def settings_row(title, subtitle=None, prefix=None, suffixes=()):
+    """A two-line row: optional icon, title + dim subtitle, widgets on the right."""
+    row = Gtk.ListBoxRow(activatable=False)
+    hbox = Gtk.Box(spacing=12)
+
+    if prefix:
+        hbox.pack_start(prefix, False, False, 0)
+
+    text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, valign=Gtk.Align.CENTER)
+    title_label = add_class(Gtk.Label(label=title, xalign=0), "row-title")
+    title_label.set_ellipsize(Pango.EllipsizeMode.END)
+    text.pack_start(title_label, False, False, 0)
+    if subtitle:
+        sub = add_class(Gtk.Label(label=subtitle, xalign=0), "row-subtitle")
+        sub.set_ellipsize(Pango.EllipsizeMode.END)
+        text.pack_start(sub, False, False, 0)
+    hbox.pack_start(text, True, True, 0)
+
+    for widget in suffixes:
+        widget.set_valign(Gtk.Align.CENTER)
+        hbox.pack_start(widget, False, False, 0)
+
+    row.add(hbox)
+    return row
+
+
+def icon_button(icon_name, tooltip, callback, *args):
+    button = Gtk.Button.new_from_icon_name(icon_name, Gtk.IconSize.BUTTON)
+    button.set_tooltip_text(tooltip)
+    button.set_relief(Gtk.ReliefStyle.NONE)
+    add_class(button, "circular")
+    button.connect("clicked", callback, *args)
+    return button
+
+
+def badge(text, accent=False):
+    label = add_class(Gtk.Label(label=text), "badge")
+    if accent:
+        add_class(label, "accent")
+    return label
+
+
 class SettingsDialog(Gtk.Dialog):
     def __init__(self, parent, config):
-        super().__init__(title="Settings", transient_for=parent, flags=0)
-        self.set_default_size(400, 300)
+        super().__init__(title="Settings", transient_for=parent, flags=0, use_header_bar=True)
+        load_css()
+        self.set_default_size(520, 720)
+        self.get_header_bar().set_subtitle("Remote Update Tray")
 
         self.config = config
 
-        box = self.get_content_area()
-
-        self.listbox = Gtk.ListBox()
-        box.add(self.listbox)
-
-        self.refresh_list()
-
-        button_box = Gtk.Box(spacing=6)
-        box.add(button_box)
-
-        add_button = Gtk.Button(label="Add")
+        add_button = Gtk.Button.new_from_icon_name("list-add-symbolic", Gtk.IconSize.BUTTON)
+        add_button.set_tooltip_text("Add machine")
         add_button.connect("clicked", self.add_machine)
-        button_box.pack_start(add_button, True, True, 0)
+        self.get_header_bar().pack_start(add_button)
 
-        interval_box = Gtk.Box(spacing=6)
-        interval_box.add(Gtk.Label(label="Check interval (minutes):"))
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        for side in ("top", "bottom"):
+            getattr(content, f"set_margin_{side}")(12)
+        for side in ("start", "end"):
+            getattr(content, f"set_margin_{side}")(24)
+
+        content.pack_start(section_title("Machines"), False, False, 0)
+        self.listbox = boxed_list()
+        content.pack_start(self.listbox, False, False, 0)
+
+        content.pack_start(section_title("General"), False, False, 0)
+        general = boxed_list()
+
         self.interval_spin = Gtk.SpinButton.new_with_range(1, 1440, 1)
         self.interval_spin.set_value(self.config.get("check_interval_minutes", 10))
         self.interval_spin.connect("value-changed", self.on_interval_changed)
-        interval_box.add(self.interval_spin)
-        box.add(interval_box)
+        general.add(settings_row("Check interval", "Minutes between update checks",
+                                 suffixes=[self.interval_spin]))
 
-        self.autostart_check = Gtk.CheckButton(label="Autostart on login")
-        self.autostart_check.set_active(get_autostart_enabled())
-        self.autostart_check.connect("toggled", self.on_autostart_toggled)
-        box.add(self.autostart_check)
+        self.autostart_switch = Gtk.Switch()
+        self.autostart_switch.set_active(get_autostart_enabled())
+        self.autostart_switch.connect("notify::active", self.on_autostart_toggled)
+        general.add(settings_row("Start on login", "Show the tray icon after logging in",
+                                 suffixes=[self.autostart_switch]))
+        content.pack_start(general, False, False, 0)
 
+        scroller = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
+        scroller.add(content)
+        box = self.get_content_area()
+        box.pack_start(scroller, True, True, 0)
+
+        self.refresh_list()
         self.show_all()
 
     def refresh_list(self):
         for row in self.listbox.get_children():
             self.listbox.remove(row)
 
-        for machine in self.config["machines"]:
-            row = Gtk.ListBoxRow()
-            hbox = Gtk.Box(spacing=10)
-
-            label = Gtk.Label(label=f"{machine['name']} ({machine['host']})", xalign=0)
-            hbox.pack_start(label, True, True, 0)
-
-            edit_btn = Gtk.Button(label="Edit")
-            edit_btn.connect("clicked", self.edit_machine, machine)
-            hbox.pack_start(edit_btn, False, False, 0)
-
-            del_btn = Gtk.Button(label="Delete")
-            del_btn.connect("clicked", self.delete_machine, machine)
-            hbox.pack_start(del_btn, False, False, 0)
-
-            row.add(hbox)
+        if not self.config["machines"]:
+            row = Gtk.ListBoxRow(activatable=False)
+            row.add(add_class(Gtk.Label(label="No machines yet. Add one with +."), "empty-hint"))
             self.listbox.add(row)
 
-        self.show_all()
+        for machine in self.config["machines"]:
+            local = machine["host"] in ("localhost", "127.0.0.1")
+            icon = Gtk.Image.new_from_icon_name(
+                "computer-symbolic" if local else "network-server-symbolic", Gtk.IconSize.LARGE_TOOLBAR
+            )
+            badges = []
+            if machine.get("root", False):
+                badges.append(badge("root"))
+            if machine.get("auto_yes", True):
+                badges.append(badge("auto-confirm", accent=True))
+
+            self.listbox.add(settings_row(
+                machine["name"],
+                machine["host"],
+                prefix=icon,
+                suffixes=badges + [
+                    icon_button("document-edit-symbolic", "Edit", self.edit_machine, machine),
+                    icon_button("user-trash-symbolic", "Remove", self.delete_machine, machine),
+                ],
+            ))
+
+        self.listbox.show_all()
 
     def on_interval_changed(self, widget):
         self.config["check_interval_minutes"] = widget.get_value_as_int()
         save_config(self.config)
 
-    def on_autostart_toggled(self, widget):
+    def on_autostart_toggled(self, widget, _param):
         set_autostart_enabled(widget.get_active())
 
     def add_machine(self, widget):
@@ -229,45 +373,83 @@ class SettingsDialog(Gtk.Dialog):
         self.machine_editor(machine)
 
     def delete_machine(self, widget, machine):
-        self.config["machines"].remove(machine)
-        save_config(self.config)
-        self.refresh_list()
+        confirm = Gtk.MessageDialog(
+            transient_for=self,
+            flags=0,
+            message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.NONE,
+            text=f"Remove “{machine['name']}”?",
+        )
+        confirm.format_secondary_text("The tray stops checking this machine. Its SSH setup is not touched.")
+        confirm.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        remove = confirm.add_button("Remove", Gtk.ResponseType.OK)
+        add_class(remove, "destructive-action")
+        response = confirm.run()
+        confirm.destroy()
+
+        if response == Gtk.ResponseType.OK:
+            self.config["machines"].remove(machine)
+            save_config(self.config)
+            self.refresh_list()
 
     def machine_editor(self, machine=None):
-        dialog = Gtk.Dialog(title="Machine", transient_for=self)
+        dialog = Gtk.Dialog(
+            title="Edit Machine" if machine else "Add Machine",
+            transient_for=self,
+            use_header_bar=True,
+        )
+        dialog.set_default_size(440, -1)
         box = dialog.get_content_area()
 
-        name_entry = Gtk.Entry()
-        host_entry = Gtk.Entry()
-        root_check = Gtk.CheckButton(label="Connect as root (no sudo)")
-        auto_yes_check = Gtk.CheckButton(label="Auto-confirm upgrade (no prompt)")
+        name_entry = Gtk.Entry(placeholder_text="e.g. docker-host", width_chars=22)
+        host_entry = Gtk.Entry(placeholder_text="host from ~/.ssh/config", width_chars=22)
+        root_switch = Gtk.Switch()
+        auto_yes_switch = Gtk.Switch()
 
         if machine:
             name_entry.set_text(machine["name"])
             host_entry.set_text(machine["host"])
-            root_check.set_active(machine.get("root", False))
-            auto_yes_check.set_active(machine.get("auto_yes", True))
+            root_switch.set_active(machine.get("root", False))
+            auto_yes_switch.set_active(machine.get("auto_yes", True))
         else:
-            auto_yes_check.set_active(True)
+            auto_yes_switch.set_active(True)
 
-        box.add(Gtk.Label(label="Name"))
-        box.add(name_entry)
-        box.add(Gtk.Label(label="Host"))
-        box.add(host_entry)
-        box.add(root_check)
-        box.add(auto_yes_check)
+        fields = boxed_list()
+        fields.add(settings_row("Name", "Shown in the tray menu", suffixes=[name_entry]))
+        fields.add(settings_row("Host", "localhost or an SSH host", suffixes=[host_entry]))
+
+        options = boxed_list()
+        options.add(settings_row("Connect as root", "Run apt and snap without sudo",
+                                 suffixes=[root_switch]))
+        options.add(settings_row("Auto-confirm", "Install updates without asking",
+                                 suffixes=[auto_yes_switch]))
+
+        inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
+        for side in ("top", "bottom", "start", "end"):
+            getattr(inner, f"set_margin_{side}")(18)
+        inner.pack_start(fields, False, False, 0)
+        inner.pack_start(options, False, False, 0)
+        box.pack_start(inner, True, True, 0)
 
         dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
-        dialog.add_button("Save", Gtk.ResponseType.OK)
+        save_button = dialog.add_button("Save", Gtk.ResponseType.OK)
+        add_class(save_button, "suggested-action")
+        dialog.set_default_response(Gtk.ResponseType.OK)
+
+        def update_save(*_):
+            save_button.set_sensitive(bool(name_entry.get_text().strip() and host_entry.get_text().strip()))
+        name_entry.connect("changed", update_save)
+        host_entry.connect("changed", update_save)
+        update_save()
 
         dialog.show_all()
         response = dialog.run()
 
         if response == Gtk.ResponseType.OK:
-            name = name_entry.get_text()
-            host = host_entry.get_text()
-            root = root_check.get_active()
-            auto_yes = auto_yes_check.get_active()
+            name = name_entry.get_text().strip()
+            host = host_entry.get_text().strip()
+            root = root_switch.get_active()
+            auto_yes = auto_yes_switch.get_active()
 
             if machine:
                 machine["name"] = name
