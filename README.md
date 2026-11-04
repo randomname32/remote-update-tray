@@ -5,19 +5,27 @@ A lightweight system tray applet for Ubuntu/GNOME that monitors remote (and loca
 ## Features
 
 - Lives in the system tray using AyatanaAppIndicator
-- Checks each configured machine for available `apt` updates every 10 minutes
-- Tray icon reflects overall status: up-to-date, updates available, or connection error
+- Checks each configured machine for available `apt` updates every 10 minutes (configurable); the package lists are refreshed first (as root or with passwordless sudo), so updates published after the daily apt run are counted too
+- Tray icon reflects overall status: up-to-date, updates available, connection error, updates running, or an update waiting for input
 - Counts only what `apt upgrade` would install; kept-back and phased packages are listed as "held back"
 - Also counts and installs Snap and Flatpak updates on machines that have them
-- Updates run in one window with a sidebar per machine (state: running, done, failed) and a built-in terminal, so prompts and sudo passwords work; each machine is re-checked as soon as its update ends
+- Updates run in one window with a sidebar per machine and a built-in terminal, so prompts and sudo passwords work:
+  - each machine shows its state: running, waiting for input, done, failed or cancelled
+  - a machine waiting for an answer (`[Y/n]`, password, other questions) gets a question mark, and the window the urgency hint
+  - clicking a machine puts the cursor straight into its terminal, so a prompt can be answered right away
+  - each machine is re-checked as soon as its update ends
+  - closing the window cancels updates waiting at a prompt (after asking); installing ones keep running in the background
 - Per-machine submenu to install updates or open an SSH terminal
-- Settings dialog to add, edit, and remove machines
+- "Update all" updates every machine at once, either as configured or with forced auto-confirm
+- Settings dialog to add, edit, and remove machines, with per-machine options:
+  - **Connect as root** — the host logs in as root, so apt and snap run without `sudo`
+  - **Auto-confirm** — install without asking (`-y`); when off, apt, flatpak and snap ask first
 - Supports `localhost` for monitoring the local machine
 - Autostarts on login via XDG autostart
 
 ## Configuration
 
-Machine definitions are stored in `~/.config/remote-update-tray/config.json` (created automatically on first run). You can manage machines through the Settings dialog in the tray menu.
+Machine definitions are stored in `~/.config/remote-update-tray/config.json` (created automatically on first run). You can manage machines through the Settings dialog in the tray menu. The check interval is not in the dialog; set `"check_interval_minutes"` in `config.json` by hand (default `10`).
 
 SSH connections use your existing SSH config and keys — make sure you can `ssh <host>` without a password prompt for each configured machine. See [Setting up passwordless SSH](#setting-up-passwordless-ssh) for instructions.
 
