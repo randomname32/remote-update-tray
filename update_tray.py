@@ -502,6 +502,10 @@ class UpdateWindow(Gtk.Window):
 
         self.sidebar = add_class(Gtk.ListBox(selection_mode=Gtk.SelectionMode.SINGLE), "update-sidebar")
         self.sidebar.connect("row-selected", self.on_row_selected)
+        # A click selects the row and *then* moves focus to the row itself, so
+        # the terminal is focused again on activation (which comes last, and
+        # also fires when the clicked row was already selected).
+        self.sidebar.connect("row-activated", self.on_row_activated)
         side_scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
         side_scroll.set_size_request(210, -1)
         side_scroll.add(self.sidebar)
@@ -686,6 +690,10 @@ class UpdateWindow(Gtk.Window):
         if row is not None:
             self.stack.set_visible_child_name(row.host)
             self.jobs[row.host]["terminal"].grab_focus()
+
+    def on_row_activated(self, listbox, row):
+        self.stack.set_visible_child_name(row.host)
+        self.jobs[row.host]["terminal"].grab_focus()
 
     def on_spawned(self, terminal, pid, error, host):
         job = self.jobs[host]
